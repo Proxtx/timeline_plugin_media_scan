@@ -1,6 +1,9 @@
 use chrono::{DateTime, Utc};
 use futures::StreamExt;
-use mongodb::Cursor;
+use mongodb::{
+    bson::{doc, Document},
+    Collection, Cursor,
+};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -102,12 +105,35 @@ impl<'a> Plugin<'a> {
             }
         };
 
-        let events_cursor: Cursor<MediaEvent> = self
+        let paths: Vec<Document> = media
+            .iter()
+            .map(|v| doc! {"path": v.path.to_str().unwrap()})
+            .collect();
+
+        let mut events_collection: Cursor<MediaEvent> = self
             .plugin_data
             .database
             .get_events()
+            .find(
+                doc! {
+                    "event": {
+                        "$in": &paths
+                    }
+                },
+                None,
+            )
             .await
-            .unwrap_or_else(|e| panic!("Database Error: {}", e));
+            .unwrap();
+
+        let insert: Vec<MediaEvent> = Vec::new();
+
+        while let Ok(true) = events_collection.advance().await {
+            let elem = events_collection.current();
+            let path = elem.get("path").unwrap().unwrap().as_str().unwrap();
+            let doc = doc! {
+                "path": path
+            };
+        }
     }
 }
 
