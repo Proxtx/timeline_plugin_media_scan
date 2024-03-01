@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use futures::StreamExt;
+use futures::{StreamExt, TryStreamExt};
 use mongodb::{
     bson::{doc, Document},
     Collection, Cursor,
@@ -7,6 +7,7 @@ use mongodb::{
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
+    future::IntoFuture,
     os::windows::fs::MetadataExt,
     path::{Path, PathBuf},
 };
@@ -15,7 +16,7 @@ use tokio::fs::{self, File};
 use crate::{
     cache::{self, Cache},
     db::Event,
-    AvailablePlugins, PluginData,
+    AvailablePlugins, Plugin as PluginTrait, PluginData,
 };
 
 pub struct Plugin<'a> {
@@ -77,10 +78,27 @@ impl<'a> crate::Plugin<'a> for Plugin<'a> {
     {
         AvailablePlugins::timeline_plugin_media_scan
     }
+
+    async fn request_loop(&mut self) -> Option<chrono::Duration> {
+        self.update_all_locations();
+        Some(chrono::Duration::minutes(5))
+    }
 }
 
 impl<'a> Plugin<'a> {
-    async fn updated_media_directory(&mut self, location: &Path) {
+    async fn update_all_locations(&mut self) {
+        let calls = self
+            .config
+            .locations
+            .iter()
+            .map(|v| v.1.location.clone())
+            .collect::<Vec<PathBuf>>();
+        for path in calls {
+            self.update_media_directory(&path).await;
+        }
+    }
+
+    async fn update_media_directory(&mut self, location: &Path) {
         let latest_time = match self.cache.get().timing_cache.get(location) {
             Some(v) => v,
             None => {
@@ -104,42 +122,73 @@ impl<'a> Plugin<'a> {
                 return;
             }
         };
-
-        let paths: Vec<Document> = media
-            .iter()
-            .map(|v| doc! {"path": v.path.to_str().unwrap()})
+        let media: Vec<MediaEvent> = media
+            .into_iter()
+            .map(|media| Event {
+                timing: crate::db::Timing::Instant(media.time_created.clone()),
+                id: media.path.clone(),
+                plugin: Plugin::get_type(),
+                event: media,
+            })
             .collect();
 
-        let mut events_collection: Cursor<MediaEvent> = self
+        let paths: Vec<&str> = media.iter().map(|v| v.event.path.as_str()).collect();
+
+        let already_found_media: Vec<MediaEvent> = match self
             .plugin_data
             .database
             .get_events()
             .find(
                 doc! {
                     "event": {
-                        "$in": &paths
+                        "path": {
+                            "$in": paths
+                        }
                     }
                 },
                 None,
             )
             .await
-            .unwrap();
+        {
+            Ok(v) => match v.try_collect().await {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("Unable to collect all matching paths: {}", e);
+                    return;
+                }
+            },
+            Err(e) => {
+                eprintln!("Error fetching already found media from database: {}", e);
+                return;
+            }
+        };
 
-        let insert: Vec<MediaEvent> = Vec::new();
+        let mut insert: Vec<MediaEvent> = Vec::new();
 
-        while let Ok(true) = events_collection.advance().await {
-            let elem = events_collection.current();
-            let path = elem.get("path").unwrap().unwrap().as_str().unwrap();
-            let doc = doc! {
-                "path": path
-            };
+        for media in media {
+            if !already_found_media.contains(&media) {
+                insert.push(media)
+            }
+        }
+
+        match self.plugin_data.database.register_events(&insert).await {
+            Ok(_t) => {
+                let cache = self.cache.get_mut();
+                cache
+                    .timing_cache
+                    .insert(location.to_path_buf(), new_latest_time);
+                self.cache.save::<Plugin>();
+            }
+            Err(e) => {
+                eprintln!("Unable to add MediaEvent to Database: {}", e)
+            }
         }
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Media {
-    path: PathBuf,
+    path: String,
     time_created: DateTime<Utc>,
 }
 
@@ -178,7 +227,7 @@ pub async fn recursive_directory_scan(
                             )
                             .unwrap(); //I'm unsure why this is even an option. I think it's because the functions also accepts i64 values, which does not make sense because they would probably result in an error
                             found_media.push(Media {
-                                path: entry.path(),
+                                path: entry.path().to_str().unwrap_or("default").to_string(),
                                 time_created: creation_time,
                             });
                             updated_newest = creation_time;
