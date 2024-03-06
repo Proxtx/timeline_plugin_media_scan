@@ -5,11 +5,13 @@ use mongodb::{
     Collection, Cursor,
 };
 use serde::{Deserialize, Serialize};
+use std::pin::Pin;
 use std::{
     collections::HashMap,
     future::IntoFuture,
     os::windows::fs::MetadataExt,
     path::{Path, PathBuf},
+    time::Duration,
 };
 use tokio::fs::{self, File};
 
@@ -19,8 +21,8 @@ use crate::{
     AvailablePlugins, Plugin as PluginTrait, PluginData,
 };
 
-pub struct Plugin<'a> {
-    plugin_data: PluginData<'a>,
+pub struct Plugin {
+    plugin_data: PluginData,
     config: ConfigData,
     cache: Cache<LocationIndexingCache>,
 }
@@ -42,15 +44,15 @@ struct LocationIndexingCache {
     timing_cache: HashMap<PathBuf, DateTime<Utc>>,
 }
 
-impl<'a> crate::Plugin<'a> for Plugin<'a> {
-    async fn new(data: PluginData<'a>) -> Self
+impl crate::Plugin for Plugin {
+    async fn new(data: PluginData) -> Self
     where
         Self: Sized,
     {
         let mut config: ConfigData = toml::Value::try_into(
             data.config
-                .expect("Failed to init media_scan plugin! No config was provided!")
-                .clone(),
+                .clone().expect("Failed to init media_scan plugin! No config was provided!")
+                ,
         )
         .unwrap_or_else(|e| panic!("Unable to init media_scan plugin! Provided config does not fit the requirements: {}", e));
         for (name, instance) in config.locations.iter_mut() {
@@ -79,13 +81,30 @@ impl<'a> crate::Plugin<'a> for Plugin<'a> {
         AvailablePlugins::timeline_plugin_media_scan
     }
 
-    async fn request_loop(&mut self) -> Option<chrono::Duration> {
-        self.update_all_locations();
-        Some(chrono::Duration::minutes(5))
+    //async fn request_loop(&mut self) -> Option<chrono::Duration> {
+    //Some(chrono::Duration::minutes(5))
+    //}
+    fn request_loop<'life0, 'async_trait>(
+        &'life0 mut self,
+    ) -> core::pin::Pin<
+        Box<
+            dyn core::future::Future<Output = Option<chrono::Duration>>
+                + core::marker::Send
+                + 'async_trait,
+        >,
+    >
+    where
+        'life0: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(async move {
+            self.update_all_locations().await;
+            Some(chrono::Duration::minutes(1))
+        })
     }
 }
 
-impl<'a> Plugin<'a> {
+impl Plugin {
     async fn update_all_locations(&mut self) {
         let calls = self
             .config
@@ -107,8 +126,22 @@ impl<'a> Plugin<'a> {
                     location.to_path_buf(),
                     DateTime::from_timestamp_millis(0).unwrap(),
                 ); //0 is a valid time-stamp
-                self.cache.update::<Plugin>(updated_cache);
-                self.cache.get().timing_cache.get(location).unwrap()
+                let mut skip = false;
+                self.cache
+                    .update::<Plugin>(updated_cache)
+                    .unwrap_or_else(|e| {
+                        eprintln!("Unable to save to cache: {}", e);
+                        skip = true;
+                    });
+                if skip {
+                    return;
+                }
+                self.cache
+                    .get()
+                    .timing_cache
+                    .get(location)
+                    .expect("Unable to cache: Probably an error inside the cache")
+                //we just updated the cache;
             }
         };
         let (media, new_latest_time) = match recursive_directory_scan(&location, latest_time).await
@@ -204,7 +237,7 @@ pub async fn recursive_directory_scan(
     let mut updated_newest = current_newest.clone();
     let mut dir = fs::read_dir(path).await?;
     let mut next_result = dir.next_entry().await;
-    while let Ok(Some(entry)) = next_result {
+    while let Ok(Some(ref entry)) = next_result {
         let file_type = entry.file_type().await?;
         if file_type.is_dir() {
             let (mut found_media_recusion, updated_time) =
@@ -218,14 +251,19 @@ pub async fn recursive_directory_scan(
                 match ex.to_str() {
                     Some(ex) => {
                         if SUPPORTED_EXTENSIONS.contains(&ex) {
-                            let creation_time = DateTime::from_timestamp_millis(
-                                File::open(entry.path())
-                                    .await?
-                                    .metadata()
-                                    .await?
-                                    .creation_time() as i64,
-                            )
-                            .unwrap(); //I'm unsure why this is even an option. I think it's because the functions also accepts i64 values, which does not make sense because they would probably result in an error
+                            let file_creation_time =
+                                match File::open(entry.path()).await?.metadata().await?.created() {
+                                    Ok(v) => v,
+                                    Err(e) => {
+                                        eprintln!(
+                                        "Unable to find creation time for file: {:?}\nError: {}",
+                                        entry.path(),
+                                        e
+                                    );
+                                        continue;
+                                    }
+                                };
+                            let creation_time: DateTime<Utc> = file_creation_time.into();
                             found_media.push(Media {
                                 path: entry.path().to_str().unwrap_or("default").to_string(),
                                 time_created: creation_time,
