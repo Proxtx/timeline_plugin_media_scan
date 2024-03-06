@@ -81,21 +81,9 @@ impl crate::Plugin for Plugin {
         AvailablePlugins::timeline_plugin_media_scan
     }
 
-    //async fn request_loop(&mut self) -> Option<chrono::Duration> {
-    //Some(chrono::Duration::minutes(5))
-    //}
-    fn request_loop<'life0, 'async_trait>(
-        &'life0 mut self,
-    ) -> core::pin::Pin<
-        Box<
-            dyn core::future::Future<Output = Option<chrono::Duration>>
-                + core::marker::Send
-                + 'async_trait,
-        >,
-    >
-    where
-        'life0: 'async_trait,
-        Self: 'async_trait,
+    fn request_loop<'a>(
+        &'a mut self,
+    ) -> core::pin::Pin<Box<dyn futures::Future<Output = Option<chrono::Duration>> + Send + 'a>>
     {
         Box::pin(async move {
             self.update_all_locations().await;
@@ -210,7 +198,9 @@ impl Plugin {
                 cache
                     .timing_cache
                     .insert(location.to_path_buf(), new_latest_time);
-                self.cache.save::<Plugin>();
+                self.cache
+                    .save::<Plugin>()
+                    .unwrap_or_else(|e| eprintln!("Unable to save cache (media scan plugin): {e}"));
             }
             Err(e) => {
                 eprintln!("Unable to add MediaEvent to Database: {}", e)
