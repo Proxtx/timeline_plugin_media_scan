@@ -81,7 +81,7 @@ impl crate::Plugin for Plugin {
         AvailablePlugins::timeline_plugin_media_scan
     }
 
-    fn request_loop<'a>(
+    fn request_loop_mut<'a>(
         &'a mut self,
     ) -> core::pin::Pin<Box<dyn futures::Future<Output = Option<chrono::Duration>> + Send + 'a>>
     {
