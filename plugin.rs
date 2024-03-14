@@ -194,13 +194,9 @@ impl Plugin {
 
         match self.plugin_data.database.register_events(&insert).await {
             Ok(_t) => {
-                let cache = self.cache.get_mut();
-                cache
-                    .timing_cache
-                    .insert(location.to_path_buf(), new_latest_time);
-                self.cache
-                    .save::<Plugin>()
-                    .unwrap_or_else(|e| eprintln!("Unable to save cache (media scan plugin): {e}"));
+                self.cache.modify::<Plugin>(move |data| {
+                    data.timing_cache.insert(location.to_path_buf(), new_latest_time);
+                }).unwrap_or_else(|e| eprintln!("Unable to save cache (media scan plugin): {e}"));
             }
             Err(e) => {
                 eprintln!("Unable to add MediaEvent to Database: {}", e)
