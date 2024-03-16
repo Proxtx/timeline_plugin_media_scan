@@ -21,6 +21,8 @@ use crate::{
     AvailablePlugins, Plugin as PluginTrait, PluginData,
 };
 
+use types::Timing;
+
 pub struct Plugin {
     plugin_data: PluginData,
     config: ConfigData,
@@ -87,7 +89,7 @@ impl crate::Plugin for Plugin {
     {
         Box::pin(async move {
             self.update_all_locations().await;
-            Some(chrono::Duration::minutes(1))
+            Some(chrono::Duration::try_minutes(1).unwrap())
         })
     }
 }
@@ -109,20 +111,17 @@ impl Plugin {
         let latest_time = match self.cache.get().timing_cache.get(location) {
             Some(v) => v,
             None => {
-                let mut updated_cache = self.cache.get().clone();
-                updated_cache.timing_cache.insert(
+                match self.cache.modify::<Plugin>(|cache| {
+                cache.timing_cache.insert(
                     location.to_path_buf(),
                     DateTime::from_timestamp_millis(0).unwrap(),
                 ); //0 is a valid time-stamp
-                let mut skip = false;
-                self.cache
-                    .update::<Plugin>(updated_cache)
-                    .unwrap_or_else(|e| {
+                }) {
+                    Ok(()) => {},
+                    Err(e) => {
                         eprintln!("Unable to save to cache: {}", e);
-                        skip = true;
-                    });
-                if skip {
-                    return;
+                        return;
+                    }
                 }
                 self.cache
                     .get()
@@ -146,7 +145,7 @@ impl Plugin {
         let media: Vec<MediaEvent> = media
             .into_iter()
             .map(|media| Event {
-                timing: crate::db::Timing::Instant(media.time_created.clone()),
+                timing: Timing::Instant(media.time_created.clone()),
                 id: media.path.clone(),
                 plugin: Plugin::get_type(),
                 event: media,
@@ -161,10 +160,8 @@ impl Plugin {
             .get_events()
             .find(
                 doc! {
-                    "event": {
-                        "path": {
-                            "$in": paths
-                        }
+                    "event.path": {
+                        "$in": paths
                     }
                 },
                 None,
@@ -191,15 +188,16 @@ impl Plugin {
                 insert.push(media)
             }
         }
-
-        match self.plugin_data.database.register_events(&insert).await {
-            Ok(_t) => {
-                self.cache.modify::<Plugin>(move |data| {
-                    data.timing_cache.insert(location.to_path_buf(), new_latest_time);
-                }).unwrap_or_else(|e| eprintln!("Unable to save cache (media scan plugin): {e}"));
-            }
-            Err(e) => {
-                eprintln!("Unable to add MediaEvent to Database: {}", e)
+        if !insert.is_empty() {
+            match self.plugin_data.database.register_events(&insert).await {
+                Ok(_t) => {
+                    self.cache.modify::<Plugin>(move |data| {
+                        data.timing_cache.insert(location.to_path_buf(), new_latest_time);
+                    }).unwrap_or_else(|e| eprintln!("Unable to save cache (media scan plugin): {e}"));
+                }
+                Err(e) => {
+                    eprintln!("Unable to add MediaEvent to Database: {}", e)
+                }
             }
         }
     }
@@ -250,11 +248,15 @@ pub async fn recursive_directory_scan(
                                     }
                                 };
                             let creation_time: DateTime<Utc> = file_creation_time.into();
-                            found_media.push(Media {
-                                path: entry.path().to_str().unwrap_or("default").to_string(),
-                                time_created: creation_time,
-                            });
-                            updated_newest = creation_time;
+                            if &creation_time > current_newest {
+                                found_media.push(Media {
+                                    path: entry.path().to_str().unwrap_or("default").to_string(),
+                                    time_created: creation_time,
+                                });
+                                if creation_time > updated_newest {
+                                    updated_newest = creation_time;
+                                }
+                            }
                         }
                     }
                     None => {
