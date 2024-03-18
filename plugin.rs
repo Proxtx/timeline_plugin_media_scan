@@ -17,11 +17,11 @@ use tokio::fs::{self, File};
 
 use crate::{
     cache::{self, Cache},
-    db::Event,
+    db::{Database, Event},
     AvailablePlugins, Plugin as PluginTrait, PluginData,
 };
 
-use types::Timing;
+use types::{api::{APIError, CompressedEvent}, timing::Timing};
 
 pub struct Plugin {
     plugin_data: PluginData,
@@ -78,11 +78,11 @@ impl crate::Plugin for Plugin {
 
     fn get_type() -> crate::AvailablePlugins
     where
-        Self: Sized,
+    Self: Sized,
     {
         AvailablePlugins::timeline_plugin_media_scan
     }
-
+    
     fn request_loop_mut<'a>(
         &'a mut self,
     ) -> core::pin::Pin<Box<dyn futures::Future<Output = Option<chrono::Duration>> + Send + 'a>>
@@ -90,6 +90,24 @@ impl crate::Plugin for Plugin {
         Box::pin(async move {
             self.update_all_locations().await;
             Some(chrono::Duration::try_minutes(1).unwrap())
+        })
+    }
+
+    fn get_compressed_events (&self, query_range: &types::timing::TimeRange) -> Pin<Box<dyn futures::Future<Output = types::api::APIResult<Vec<types::api::CompressedEvent>>> + Send>> {
+        let filter = Database::generate_range_filter(query_range);
+        let database = self.plugin_data.database.clone();
+        Box::pin(async move {
+            let mut cursor = database.get_events::<Media>().find(filter, None).await?;
+            let mut result = Vec::new();
+            while let Some(v) = cursor.next().await {
+                let t = v?;
+                result.push(CompressedEvent {
+                    time: t.timing,
+                    data: Box::new(t.event.path)
+                })
+            }
+
+            Ok(result)
         })
     }
 }
