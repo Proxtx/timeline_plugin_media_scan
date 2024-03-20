@@ -1,4 +1,8 @@
-use leptos::view;
+use std::path::{Path, PathBuf};
+
+use leptos::{view, IntoView};
+
+use crate::plugin_manager::PluginEventData;
 
 pub struct Plugin {}
 
@@ -13,9 +17,10 @@ impl crate::Plugin for Plugin {
     }
 
     fn get_component(&self, data: PluginEventData) -> crate::event_manager::EventResult<Box<dyn Fn() -> leptos::View>> {
-        let _ = data;
-        Ok(|| {
-            view! { <h1>Hello</h1> }.into_view()
-        })
+        let path = data.get_data::<PathBuf>()?;
+        Ok(Box::new(move || {
+            let filename = path.file_name().unwrap().to_str().unwrap().to_string();
+            view! { <h1>{filename}</h1> }.into_view()
+        }))
     }
 }
