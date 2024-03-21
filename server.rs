@@ -102,6 +102,7 @@ impl crate::Plugin for Plugin {
             while let Some(v) = cursor.next().await {
                 let t = v?;
                 result.push(CompressedEvent {
+                    title: "Media".to_string(),
                     time: t.timing,
                     data: Box::new(t.event.path)
                 })
