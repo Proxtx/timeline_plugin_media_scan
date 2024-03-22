@@ -15,6 +15,7 @@ use std::{
     time::Duration,
 };
 use tokio::fs::{self, File};
+use tokio::sync::RwLock;
 
 use crate::{
     api::auth, cache::{self, Cache}, config::Config, db::{Database, Event}, AvailablePlugins, Plugin as PluginTrait, PluginData
@@ -25,12 +26,13 @@ use types::{api::{APIError, APIResult, CompressedEvent}, timing::Timing};
 pub struct Plugin {
     plugin_data: PluginData,
     config: ConfigData,
-    cache: Cache<LocationIndexingCache>,
+    cache: RwLock<Cache<LocationIndexingCache>>,
 }
 
 #[derive(Serialize, Deserialize)]
 struct ConfigData {
     pub locations: HashMap<String, MediaLocation>,
+    pub interval: u32
 }
 
 #[derive(Serialize, Deserialize)]
@@ -71,7 +73,7 @@ impl crate::Plugin for Plugin {
         Plugin {
             plugin_data: data,
             config,
-            cache,
+            cache: RwLock::new(cache),
         }
     }
 
@@ -82,13 +84,13 @@ impl crate::Plugin for Plugin {
         AvailablePlugins::timeline_plugin_media_scan
     }
     
-    fn request_loop_mut<'a>(
-        &'a mut self,
+    fn request_loop<'a>(
+        &'a self,
     ) -> core::pin::Pin<Box<dyn futures::Future<Output = Option<chrono::Duration>> + Send + 'a>>
     {
         Box::pin(async move {
             self.update_all_locations().await;
-            Some(chrono::Duration::try_minutes(1).unwrap())
+            Some(chrono::Duration::try_minutes(self.config.interval as i64).unwrap())
         })
     }
 
@@ -133,7 +135,7 @@ async fn get_file (file: String, cookies: &CookieJar<'_>, config: &State<Config>
 }
 
 impl Plugin {
-    async fn update_all_locations(&mut self) {
+    async fn update_all_locations(&self) {
         let calls = self
             .config
             .locations
@@ -145,11 +147,12 @@ impl Plugin {
         }
     }
 
-    async fn update_media_directory(&mut self, location: &Path) {
-        let latest_time = match self.cache.get().timing_cache.get(location) {
-            Some(v) => v,
+    async fn update_media_directory(&self, location: &Path) {
+        let last_cache = self.cache.read().await.get().timing_cache.get(location).cloned();
+        let latest_time = match last_cache {
+            Some(v) => v.clone(),
             None => {
-                match self.cache.modify::<Plugin>(|cache| {
+                match self.cache.write().await.modify::<Plugin>(|cache| {
                 cache.timing_cache.insert(
                     location.to_path_buf(),
                     DateTime::from_timestamp_millis(0).unwrap(),
@@ -161,15 +164,15 @@ impl Plugin {
                         return;
                     }
                 }
-                self.cache
+                self.cache.read().await
                     .get()
                     .timing_cache
                     .get(location)
-                    .expect("Unable to cache: Probably an error inside the cache")
+                    .expect("Unable to cache: Probably an error inside the cache").clone()
                 //we just updated the cache;
             }
         };
-        let (media, new_latest_time) = match recursive_directory_scan(&location, latest_time).await
+        let (media, new_latest_time) = match recursive_directory_scan(&location, &latest_time).await
         {
             Ok(v) => v,
             Err(e) => {
@@ -183,7 +186,7 @@ impl Plugin {
         let media: Vec<MediaEvent> = media
             .into_iter()
             .map(|media| Event {
-                timing: Timing::Instant(media.time_created.clone()),
+                timing: Timing::Instant(media.time_modified.clone()),
                 id: media.path.clone(),
                 plugin: Plugin::get_type(),
                 event: media,
@@ -229,7 +232,7 @@ impl Plugin {
         if !insert.is_empty() {
             match self.plugin_data.database.register_events(&insert).await {
                 Ok(_t) => {
-                    self.cache.modify::<Plugin>(move |data| {
+                    self.cache.write().await.modify::<Plugin>(move |data| {
                         data.timing_cache.insert(location.to_path_buf(), new_latest_time);
                     }).unwrap_or_else(|e| eprintln!("Unable to save cache (media scan plugin): {e}"));
                 }
@@ -244,12 +247,12 @@ impl Plugin {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Media {
     path: String,
-    time_created: DateTime<Utc>,
+    time_modified: DateTime<Utc>,
 }
 
 type MediaEvent = Event<Media>;
 
-const SUPPORTED_EXTENSIONS: [&str; 6] = ["png", "jpg", "mp4", "mkv", "webm", "jpeg"];
+const SUPPORTED_EXTENSIONS: [&str; 8] = ["png", "jpg", "mp4", "mkv", "webm", "jpeg", "mov", "heic"];
 
 pub async fn recursive_directory_scan(
     path: &Path,
@@ -272,9 +275,9 @@ pub async fn recursive_directory_scan(
             if let Some(ex) = entry.path().extension() {
                 match ex.to_str() {
                     Some(ex) => {
-                        if SUPPORTED_EXTENSIONS.contains(&ex) {
+                        if SUPPORTED_EXTENSIONS.contains(&ex.to_lowercase().as_str()) {
                             let file_creation_time =
-                                match File::open(entry.path()).await?.metadata().await?.created() {
+                                match File::open(entry.path()).await?.metadata().await?.modified() {
                                     Ok(v) => v,
                                     Err(e) => {
                                         eprintln!(
@@ -289,7 +292,7 @@ pub async fn recursive_directory_scan(
                             if &creation_time > current_newest {
                                 found_media.push(Media {
                                     path: entry.path().to_str().unwrap_or("default").to_string(),
-                                    time_created: creation_time,
+                                    time_modified: creation_time,
                                 });
                                 if creation_time > updated_newest {
                                     updated_newest = creation_time;
