@@ -4,8 +4,9 @@ use mongodb::{
     bson::{doc, Document},
     Collection, Cursor,
 };
+use rocket::{get, http::{CookieJar, Status}, routes, State};
 use serde::{Deserialize, Serialize};
-use std::pin::Pin;
+use std::{pin::Pin, str::FromStr};
 use std::{
     collections::HashMap,
     future::IntoFuture,
@@ -16,12 +17,10 @@ use std::{
 use tokio::fs::{self, File};
 
 use crate::{
-    cache::{self, Cache},
-    db::{Database, Event},
-    AvailablePlugins, Plugin as PluginTrait, PluginData,
+    api::auth, cache::{self, Cache}, config::Config, db::{Database, Event}, AvailablePlugins, Plugin as PluginTrait, PluginData
 };
 
-use types::{api::{APIError, CompressedEvent}, timing::Timing};
+use types::{api::{APIError, APIResult, CompressedEvent}, timing::Timing};
 
 pub struct Plugin {
     plugin_data: PluginData,
@@ -110,6 +109,26 @@ impl crate::Plugin for Plugin {
 
             Ok(result)
         })
+    }
+
+    fn get_routes () -> Vec<rocket::Route> {
+        routes![get_file]
+    }
+}
+
+#[get("/file/<file>")]
+async fn get_file (file: String, cookies: &CookieJar<'_>, config: &State<Config>) -> (Status, Option<Result<File, std::io::Error>>) {
+    println!("{}", file);
+    if let Err(_) = auth(cookies, config) {
+        return (Status::Unauthorized, None)
+    }
+    match PathBuf::from_str(&file) {
+        Ok(v) => {
+            (Status::Ok, (Some(File::open(v).await)))
+        }
+        Err(_) => {
+            (Status::BadRequest, None)
+        }
     }
 }
 
