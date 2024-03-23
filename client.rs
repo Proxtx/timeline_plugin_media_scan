@@ -23,7 +23,7 @@ impl crate::Plugin for Plugin {
         let path = data.get_data::<PathBuf>()?;
         let extension = path.extension().unwrap().to_str().unwrap().to_lowercase().to_string();
         let path_string = path.as_os_str().to_str().unwrap().to_string();
-        let path_encoded = leptos::window().get("encodeURIComponent").unwrap().dyn_into::<Function>().unwrap().call1(&JsValue::null(), &JsValue::from_str(&path_string)).unwrap().as_string().unwrap();
+        let path_encoded = api::encode_url_component(&path_string);
         let url = api::relative_url("/api/plugin/timeline_plugin_media_scan/file/").unwrap().join(&path_encoded).unwrap().as_str().to_string();
         Ok(Box::new(move || {
             view! {
