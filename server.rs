@@ -103,7 +103,7 @@ impl crate::Plugin for Plugin {
             while let Some(v) = cursor.next().await {
                 let t = v?;
                 result.push(CompressedEvent {
-                    title: "Media".to_string(),
+                    title: format!("{}", t.event.location_name),
                     time: t.timing,
                     data: Box::new(t.event.path)
                 })
@@ -120,7 +120,6 @@ impl crate::Plugin for Plugin {
 
 #[get("/file/<file>")]
 async fn get_file (file: String, cookies: &CookieJar<'_>, config: &State<Config>) -> (Status, Option<Result<File, std::io::Error>>) {
-    println!("{}", file);
     if let Err(_) = auth(cookies, config) {
         return (Status::Unauthorized, None)
     }
@@ -136,18 +135,12 @@ async fn get_file (file: String, cookies: &CookieJar<'_>, config: &State<Config>
 
 impl Plugin {
     async fn update_all_locations(&self) {
-        let calls = self
-            .config
-            .locations
-            .iter()
-            .map(|v| v.1.location.clone())
-            .collect::<Vec<PathBuf>>();
-        for path in calls {
-            self.update_media_directory(&path).await;
+        for (name, location) in self.config.locations.iter() {
+            self.update_media_directory(&name, &location.location).await;
         }
     }
 
-    async fn update_media_directory(&self, location: &Path) {
+    async fn update_media_directory(&self, name: &str, location: &Path) {
         let last_cache = self.cache.read().await.get().timing_cache.get(location).cloned();
         let latest_time = match last_cache {
             Some(v) => v.clone(),
@@ -172,7 +165,7 @@ impl Plugin {
                 //we just updated the cache;
             }
         };
-        let (media, new_latest_time) = match recursive_directory_scan(&location, &latest_time).await
+        let (media, new_latest_time) = match recursive_directory_scan(name, &location, &latest_time).await
         {
             Ok(v) => v,
             Err(e) => {
@@ -248,6 +241,7 @@ impl Plugin {
 pub struct Media {
     path: String,
     time_modified: DateTime<Utc>,
+    location_name: String
 }
 
 type MediaEvent = Event<Media>;
@@ -255,6 +249,7 @@ type MediaEvent = Event<Media>;
 const SUPPORTED_EXTENSIONS: [&str; 8] = ["png", "jpg", "mp4", "mkv", "webm", "jpeg", "mov", "heic"];
 
 pub async fn recursive_directory_scan(
+    location_name: &str,
     path: &Path,
     current_newest: &DateTime<Utc>,
 ) -> Result<(Vec<Media>, DateTime<Utc>), std::io::Error> {
@@ -266,7 +261,7 @@ pub async fn recursive_directory_scan(
         let file_type = entry.file_type().await?;
         if file_type.is_dir() {
             let (mut found_media_recusion, updated_time) =
-                Box::pin(recursive_directory_scan(&entry.path(), current_newest)).await?;
+                Box::pin(recursive_directory_scan(&location_name, &entry.path(), current_newest)).await?;
             found_media.append(&mut found_media_recusion);
             if updated_time > updated_newest {
                 updated_newest = updated_time;
@@ -293,6 +288,7 @@ pub async fn recursive_directory_scan(
                                 found_media.push(Media {
                                     path: entry.path().to_str().unwrap_or("default").to_string(),
                                     time_modified: creation_time,
+                                    location_name: location_name.to_string()
                                 });
                                 if creation_time > updated_newest {
                                     updated_newest = creation_time;
