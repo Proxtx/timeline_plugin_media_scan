@@ -89,6 +89,8 @@ impl crate::Plugin for Plugin {
 
     fn get_compressed_events (&self, query_range: &types::timing::TimeRange) -> Pin<Box<dyn futures::Future<Output = types::api::APIResult<Vec<types::api::CompressedEvent>>> + Send>> {
         let filter = Database::generate_range_filter(query_range);
+        let plg_filter = Database::generate_find_plugin_filter(AvailablePlugins::timeline_plugin_media_scan);
+        let filter = Database::combine_documents(filter, plg_filter);
         let database = self.plugin_data.database.clone();
         Box::pin(async move {
             let mut cursor = database.get_events::<Media>().find(filter, None).await?;
