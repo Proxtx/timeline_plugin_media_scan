@@ -1,11 +1,8 @@
-use std::{ops::Deref, path::{Path, PathBuf}, str::FromStr};
-
-use leptos::{logging, view, IntoView};
-use url::Url;
-use web_sys::{js_sys::{self, Function}, wasm_bindgen::JsValue};
-use leptos::wasm_bindgen::JsCast;
-
-use crate::{api, plugin_manager::{PluginEventData, Style}};
+use {
+    std::path::PathBuf,
+    leptos::{view, IntoView},
+    crate::{api, plugin_manager::{PluginEventData, Style}}
+};
 
 pub struct Plugin {}
 
