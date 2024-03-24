@@ -1,27 +1,20 @@
-use chrono::{DateTime, Utc};
-use futures::{StreamExt, TryStreamExt};
-use mongodb::{
-    bson::{doc, Document},
-    Collection, Cursor,
+use {
+    chrono::{DateTime, Utc},
+    futures::{StreamExt, TryStreamExt},
+    mongodb::bson::doc,
+    rocket::{get, http::{CookieJar, Status}, routes, State},
+    serde::{Deserialize, Serialize},
+    std::{
+        pin::Pin, str::FromStr,
+        collections::HashMap,
+        path::{Path, PathBuf},
+    },
+    tokio::{fs::{self, File}, sync::RwLock},
+    crate::{
+        api::auth, cache::Cache, config::Config, db::{Database, Event}, AvailablePlugins, Plugin as PluginTrait, PluginData
+    },
+    types::{api::CompressedEvent, timing::Timing}
 };
-use rocket::{get, http::{CookieJar, Status}, routes, State};
-use serde::{Deserialize, Serialize};
-use std::{pin::Pin, str::FromStr};
-use std::{
-    collections::HashMap,
-    future::IntoFuture,
-    os::windows::fs::MetadataExt,
-    path::{Path, PathBuf},
-    time::Duration,
-};
-use tokio::fs::{self, File};
-use tokio::sync::RwLock;
-
-use crate::{
-    api::auth, cache::{self, Cache}, config::Config, db::{Database, Event}, AvailablePlugins, Plugin as PluginTrait, PluginData
-};
-
-use types::{api::{APIError, APIResult, CompressedEvent}, timing::Timing};
 
 pub struct Plugin {
     plugin_data: PluginData,
@@ -103,7 +96,7 @@ impl crate::Plugin for Plugin {
             while let Some(v) = cursor.next().await {
                 let t = v?;
                 result.push(CompressedEvent {
-                    title: format!("{}", t.event.location_name),
+                    title: t.event.location_name,
                     time: t.timing,
                     data: Box::new(t.event.path)
                 })
@@ -120,7 +113,7 @@ impl crate::Plugin for Plugin {
 
 #[get("/file/<file>")]
 async fn get_file (file: String, cookies: &CookieJar<'_>, config: &State<Config>) -> (Status, Option<Result<File, std::io::Error>>) {
-    if let Err(_) = auth(cookies, config) {
+    if auth(cookies, config).is_err() {
         return (Status::Unauthorized, None)
     }
     match PathBuf::from_str(&file) {
@@ -136,36 +129,37 @@ async fn get_file (file: String, cookies: &CookieJar<'_>, config: &State<Config>
 impl Plugin {
     async fn update_all_locations(&self) {
         for (name, location) in self.config.locations.iter() {
-            self.update_media_directory(&name, &location.location).await;
+            self.update_media_directory(name, &location.location).await;
         }
     }
 
     async fn update_media_directory(&self, name: &str, location: &Path) {
         let last_cache = self.cache.read().await.get().timing_cache.get(location).cloned();
         let latest_time = match last_cache {
-            Some(v) => v.clone(),
+            Some(v) => v,
             None => {
-                match self.cache.write().await.modify::<Plugin>(|cache| {
+                let mod_result = self.cache.write().await.modify::<Plugin>(|cache| {
                 cache.timing_cache.insert(
                     location.to_path_buf(),
                     DateTime::from_timestamp_millis(0).unwrap(),
                 ); //0 is a valid time-stamp
-                }) {
+                });
+                match mod_result  {
                     Ok(()) => {},
                     Err(e) => {
                         eprintln!("Unable to save to cache: {}", e);
                         return;
                     }
                 }
-                self.cache.read().await
+                *self.cache.read().await
                     .get()
                     .timing_cache
                     .get(location)
-                    .expect("Unable to cache: Probably an error inside the cache").clone()
+                    .expect("Unable to cache: Probably an error inside the cache")
                 //we just updated the cache;
             }
         };
-        let (media, new_latest_time) = match recursive_directory_scan(name, &location, &latest_time).await
+        let (media, new_latest_time) = match recursive_directory_scan(name, location, &latest_time).await
         {
             Ok(v) => v,
             Err(e) => {
@@ -179,7 +173,7 @@ impl Plugin {
         let media: Vec<MediaEvent> = media
             .into_iter()
             .map(|media| Event {
-                timing: Timing::Instant(media.time_modified.clone()),
+                timing: Timing::Instant(media.time_modified),
                 id: media.path.clone(),
                 plugin: Plugin::get_type(),
                 event: media,
@@ -254,14 +248,14 @@ pub async fn recursive_directory_scan(
     current_newest: &DateTime<Utc>,
 ) -> Result<(Vec<Media>, DateTime<Utc>), std::io::Error> {
     let mut found_media = Vec::new();
-    let mut updated_newest = current_newest.clone();
+    let mut updated_newest = *current_newest;
     let mut dir = fs::read_dir(path).await?;
     let mut next_result = dir.next_entry().await;
     while let Ok(Some(ref entry)) = next_result {
         let file_type = entry.file_type().await?;
         if file_type.is_dir() {
             let (mut found_media_recusion, updated_time) =
-                Box::pin(recursive_directory_scan(&location_name, &entry.path(), current_newest)).await?;
+                Box::pin(recursive_directory_scan(location_name, &entry.path(), current_newest)).await?;
             found_media.append(&mut found_media_recusion);
             if updated_time > updated_newest {
                 updated_newest = updated_time;
