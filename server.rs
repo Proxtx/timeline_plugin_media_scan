@@ -242,7 +242,7 @@ pub struct Media {
 
 type MediaEvent = Event<Media>;
 
-const SUPPORTED_EXTENSIONS: [&str; 8] = ["png", "jpg", "mp4", "mkv", "webm", "jpeg", "mov", "heic"];
+const SUPPORTED_EXTENSIONS: [&str; 9] = ["png", "jpg", "mp4", "mkv", "webm", "jpeg", "mov", "heic", "gif"];
 
 pub async fn recursive_directory_scan(
     location_name: &str,
