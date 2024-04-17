@@ -8,6 +8,7 @@ use {
         pin::Pin, str::FromStr,
         collections::HashMap,
         path::{Path, PathBuf},
+        sync::atomic::{AtomicU32, Ordering}
     },
     tokio::{fs::{self, File}, sync::RwLock},
     crate::{
@@ -20,12 +21,14 @@ pub struct Plugin {
     plugin_data: PluginData,
     config: ConfigData,
     cache: RwLock<Cache<LocationIndexingCache>>,
+    full_reload_remaining: AtomicU32
 }
 
 #[derive(Serialize, Deserialize)]
 struct ConfigData {
     pub locations: HashMap<String, MediaLocation>,
-    pub interval: u32
+    pub interval: u32,
+    pub full_reload_interval: Option<u32>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -65,6 +68,10 @@ impl crate::Plugin for Plugin {
 
         Plugin {
             plugin_data: data,
+            full_reload_remaining: match config.full_reload_interval {
+                Some(v) => AtomicU32::from(v),
+                None => AtomicU32::from(0)
+            },
             config,
             cache: RwLock::new(cache),
         }
@@ -130,16 +137,32 @@ async fn get_file (file: String, cookies: &CookieJar<'_>, config: &State<Config>
 
 impl Plugin {
     async fn update_all_locations(&self) {
+        let ignore_cache = match self.config.full_reload_interval {
+            Some(v) => {
+                let current_remain = self.full_reload_remaining.load(Ordering::Relaxed);
+                match current_remain == 0 {
+                    true => {
+                        self.full_reload_remaining.store(v, Ordering::Relaxed);
+                        true
+                    }
+                    false => {
+                        self.full_reload_remaining.store(current_remain-1, Ordering::Relaxed);
+                        false
+                    }
+                }
+            }
+            None => false
+        };
         for (name, location) in self.config.locations.iter() {
-            self.update_media_directory(name, &location.location).await;
+            self.update_media_directory(name, &location.location, ignore_cache).await;
         }
     }
 
-    async fn update_media_directory(&self, name: &str, location: &Path) {
+    async fn update_media_directory(&self, name: &str, location: &Path, full_reload: bool) {
         let last_cache = self.cache.read().await.get().timing_cache.get(location).cloned();
-        let latest_time = match last_cache {
-            Some(v) => v,
-            None => {
+        let latest_time = match (full_reload, last_cache) {
+            (false, Some(v)) => v,
+            (false, None) => {
                 let mod_result = self.cache.write().await.modify::<Plugin>(|cache| {
                 cache.timing_cache.insert(
                     location.to_path_buf(),
@@ -159,6 +182,9 @@ impl Plugin {
                     .get(location)
                     .expect("Unable to cache: Probably an error inside the cache")
                 //we just updated the cache;
+            },
+            (true, _) => {
+                DateTime::from_timestamp_millis(0).unwrap()
             }
         };
         let (media, new_latest_time) = match recursive_directory_scan(name, location, &latest_time).await
