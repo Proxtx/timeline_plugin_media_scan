@@ -172,7 +172,7 @@ impl Plugin {
                 match mod_result  {
                     Ok(()) => {},
                     Err(e) => {
-                        crate::error::error_string(self.plugin_data.database.clone(), format!("Unable to save to cache: {}", e), Some(<Plugin as crate::Plugin>::get_type()));
+                        self.plugin_data.report_error_string(format!("Unable to save to cache: {}", e));
                         return;
                     }
                 }
@@ -191,7 +191,7 @@ impl Plugin {
         {
             Ok(v) => v,
             Err(e) => {
-                crate::error::error_string(self.plugin_data.database.clone(), format!("The Media Scan plugin was unable to scan a directory: {:?} \n Error: {}", location, e), Some(<Plugin as crate::Plugin>::get_type()));
+                self.plugin_data.report_error_string(format!("The Media Scan plugin was unable to scan a directory: {:?} \n Error: {}", location, e));
                 return;
             }
         };
@@ -224,12 +224,12 @@ impl Plugin {
             Ok(v) => match v.try_collect().await {
                 Ok(v) => v,
                 Err(e) => {
-                    crate::error::error_string(self.plugin_data.database.clone(), format!("Unable to collect all matching paths: {}", e), Some(<Plugin as crate::Plugin>::get_type()));
+                    self.plugin_data.report_error_string(format!("Unable to collect all matching paths: {}", e));
                     return;
                 }
             },
             Err(e) => {
-                crate::error::error_string(self.plugin_data.database.clone(), format!("Error fetching already found media from database: {}", e), Some(<Plugin as crate::Plugin>::get_type()));
+                self.plugin_data.report_error_string(format!("Error fetching already found media from database: {}", e));
                 return;
             }
         };
@@ -247,11 +247,11 @@ impl Plugin {
                     self.cache.write().await.modify::<Plugin>(move |data| {
                         data.timing_cache.insert(location.to_path_buf(), new_latest_time);
                     }).unwrap_or_else(|e| {
-                        crate::error::error_string(self.plugin_data.database.clone(), format!("Unable to save cache (media scan plugin): {e}"), Some(<Plugin as crate::Plugin>::get_type()));
+                        self.plugin_data.report_error_string(format!("Unable to save cache (media scan plugin): {e}"));
                 });
                 }
                 Err(e) => {
-                    crate::error::error_string(self.plugin_data.database.clone(), format!("Unable to add MediaEvent to Database: {}", e), Some(<Plugin as crate::Plugin>::get_type()));
+                    self.plugin_data.report_error_string(format!("Unable to add MediaEvent to Database: {}", e));
                 }
             }
         }
