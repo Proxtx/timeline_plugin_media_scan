@@ -12,7 +12,7 @@ use {
     },
     tokio::{fs::{self, File}, sync::RwLock},
     crate::{
-        api::auth, cache::Cache, config::Config, db::{Database, Event}, AvailablePlugins, Plugin as PluginTrait, PluginData
+        api::auth, cache::Cache, config::Config, db::{Database, Event}, AvailablePlugins, Plugin as PluginTrait, PluginData, plugin_manager::PluginManager
     },
     types::{api::CompressedEvent, timing::Timing}
 };
@@ -116,7 +116,7 @@ impl crate::Plugin for Plugin {
     }
 
     fn get_routes () -> Vec<rocket::Route> {
-        routes![get_file]
+        routes![get_file, get_status]
     }
 }
 
@@ -133,6 +133,11 @@ async fn get_file (file: String, cookies: &CookieJar<'_>, config: &State<Config>
             (Status::BadRequest, None)
         }
     }
+}
+
+#[get("/status")]
+async fn get_status(cookies: &CookieJar<'_>, config: &State<Config>, plugin_manager: &State<PluginManager>) -> (Status, Option<String>) {
+    todo!();
 }
 
 impl Plugin {
