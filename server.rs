@@ -211,17 +211,17 @@ impl Plugin {
             .collect();
 
         let paths: Vec<&str> = media.iter().map(|v| v.event.path.as_str()).collect();
-
         let already_found_media: Vec<MediaEvent> = match self
             .plugin_data
             .database
             .get_events()
             .find(
+                Database::combine_documents(Database::generate_find_plugin_filter(AvailablePlugins::timeline_plugin_media_scan), 
                 doc! {
                     "event.path": {
                         "$in": paths
                     }
-                },
+                }),
                 None,
             )
             .await
