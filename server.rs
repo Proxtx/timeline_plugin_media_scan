@@ -21,7 +21,13 @@ pub struct Plugin {
     plugin_data: PluginData,
     config: ConfigData,
     cache: RwLock<Cache<LocationIndexingCache>>,
-    full_reload_remaining: AtomicU32
+    full_reload_remaining: AtomicU32,
+    current_status: RwLock<ScanStatus>
+}
+
+enum ScanStatus {
+    Busy(String),
+    Waiting
 }
 
 #[derive(Serialize, Deserialize)]
@@ -74,6 +80,7 @@ impl crate::Plugin for Plugin {
             },
             config,
             cache: RwLock::new(cache),
+            current_status: RwLock::new(ScanStatus::Waiting)
         }
     }
 
