@@ -25,9 +25,19 @@ pub struct Plugin {
     current_status: RwLock<ScanStatus>
 }
 
+#[derive(Debug)]
 enum ScanStatus {
     Busy(String),
     Waiting
+}
+
+impl std::fmt::Display for ScanStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Busy(w) => write!(f, "Busy with: {}", w),
+            Self::Waiting => write!(f, "Waiting")
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -143,8 +153,9 @@ async fn get_file (file: String, cookies: &CookieJar<'_>, config: &State<Config>
 }
 
 #[get("/status")]
-async fn get_status(cookies: &CookieJar<'_>, config: &State<Config>, plugin_manager: &State<PluginManager>) -> (Status, Option<String>) {
-    todo!();
+async fn get_status(cookies: &CookieJar<'_>, config: &State<Config>, plugin_manager: &State<PluginManager>) -> (Status, String) {
+    let plg = plugin_manager.plugins.get("timeline_plugin_media_scan").unwrap().read().await;
+    (Status::Ok, format!("{}\nFull reload remaining: {}", plg.))
 }
 
 impl Plugin {
@@ -166,8 +177,15 @@ impl Plugin {
             None => false
         };
         for (name, location) in self.config.locations.iter() {
+            {
+                let mut status = self.current_status.write().await; 
+                *status = ScanStatus::Busy(name.clone());
+            }
             self.update_media_directory(name, &location.location, ignore_cache).await;
         }
+
+        let mut status = self.current_status.write().await;
+        *status = ScanStatus::Waiting;
     }
 
     async fn update_media_directory(&self, name: &str, location: &Path, full_reload: bool) {
