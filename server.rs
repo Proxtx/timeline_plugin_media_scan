@@ -8,13 +8,14 @@ use {
         pin::Pin, str::FromStr,
         collections::HashMap,
         path::{Path, PathBuf},
-        sync::atomic::{AtomicU32, Ordering}
+        sync::{atomic::{AtomicU32, Ordering}, Arc}
     },
     tokio::{fs::{self, File}, sync::RwLock},
     crate::{
         api::auth, cache::Cache, config::Config, db::{Database, Event}, AvailablePlugins, Plugin as PluginTrait, PluginData, plugin_manager::PluginManager
     },
-    types::{api::CompressedEvent, timing::Timing}
+    types::{api::CompressedEvent, timing::Timing},
+    rocket::{Rocket, Build}
 };
 
 pub struct Plugin {
@@ -22,7 +23,7 @@ pub struct Plugin {
     config: ConfigData,
     cache: RwLock<Cache<LocationIndexingCache>>,
     full_reload_remaining: AtomicU32,
-    current_status: RwLock<ScanStatus>
+    current_status: Arc<RwLock<ScanStatus>>
 }
 
 #[derive(Debug)]
@@ -90,7 +91,7 @@ impl crate::Plugin for Plugin {
             },
             config,
             cache: RwLock::new(cache),
-            current_status: RwLock::new(ScanStatus::Waiting)
+            current_status: Arc::new(RwLock::new(ScanStatus::Waiting))
         }
     }
 
@@ -135,6 +136,10 @@ impl crate::Plugin for Plugin {
     fn get_routes () -> Vec<rocket::Route> {
         routes![get_file, get_status]
     }
+
+    fn rocket_build_access (&self, rocket: Rocket<Build>) -> Rocket<Build> {
+        rocket.manage(self.current_status.clone())
+    }
 }
 
 #[get("/file/<file>")]
@@ -153,9 +158,12 @@ async fn get_file (file: String, cookies: &CookieJar<'_>, config: &State<Config>
 }
 
 #[get("/status")]
-async fn get_status(cookies: &CookieJar<'_>, config: &State<Config>, plugin_manager: &State<PluginManager>) -> (Status, String) {
-    let plg = plugin_manager.plugins.get("timeline_plugin_media_scan").unwrap().read().await;
-    (Status::Ok, format!("{}\nFull reload remaining: {}", plg.))
+async fn get_status(cookies: &CookieJar<'_>, config: &State<Config>, current_status: &State<Arc<RwLock<ScanStatus>>>) -> (Status, Option<String>) {
+    if auth(cookies, config).is_err() {
+        return (Status::Unauthorized, None)
+    }
+    let status = current_status.read().await;
+    (Status::Ok, Some(format!("{}", status)))
 }
 
 impl Plugin {
