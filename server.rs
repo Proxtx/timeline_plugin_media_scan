@@ -12,7 +12,7 @@ use {
     },
     tokio::{fs::{self, File}, sync::RwLock},
     crate::{
-        api::auth, cache::Cache, config::Config, db::{Database, Event}, AvailablePlugins, Plugin as PluginTrait, PluginData, plugin_manager::PluginManager
+        api::auth, cache::Cache, config::Config, db::{Database, Event}, AvailablePlugins, Plugin as PluginTrait, PluginData
     },
     types::{api::CompressedEvent, timing::Timing},
     rocket::{Rocket, Build}
@@ -305,7 +305,7 @@ pub struct Media {
 
 type MediaEvent = Event<Media>;
 
-const SUPPORTED_EXTENSIONS: [&str; 9] = ["png", "jpg", "mp4", "mkv", "webm", "jpeg", "mov", "heic", "gif"];
+const SUPPORTED_EXTENSIONS: [&str; 11] = ["png", "jpg", "mp4", "mkv", "webm", "jpeg", "mov", "heic", "gif", "mp3", "opus"];
 
 pub async fn recursive_directory_scan(
     location_name: &str,

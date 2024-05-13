@@ -38,6 +38,19 @@ impl crate::Plugin for Plugin {
                         }
                             .into_view()
                     }
+                    "mp3" | "opus" => {
+                        view! {
+                            <audio
+                                style:width="100%"
+                                style:color="var(--lightColor)"
+                                src=url
+                                controls
+                            >
+                                Loading audio
+                            </audio>
+                        }
+                            .into_view()
+                    }
                     _ => view! { <img style:width="100%" src=url/> }.into_view(),
                 }}
             }.into_view()
