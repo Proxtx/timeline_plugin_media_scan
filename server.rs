@@ -29,14 +29,14 @@ pub struct Plugin {
 #[derive(Debug)]
 enum ScanStatus {
     Busy(String),
-    Waiting
+    Waiting(chrono::DateTime<chrono::Utc>)
 }
 
 impl std::fmt::Display for ScanStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Busy(w) => write!(f, "Busy with: {}", w),
-            Self::Waiting => write!(f, "Waiting")
+            Self::Waiting(since) => write!(f, "Waiting since: {}", since)
         }
     }
 }
@@ -91,7 +91,7 @@ impl crate::Plugin for Plugin {
             },
             config,
             cache: RwLock::new(cache),
-            current_status: Arc::new(RwLock::new(ScanStatus::Waiting))
+            current_status: Arc::new(RwLock::new(ScanStatus::Waiting(chrono::Utc::now())))
         }
     }
 
@@ -193,7 +193,7 @@ impl Plugin {
         }
 
         let mut status = self.current_status.write().await;
-        *status = ScanStatus::Waiting;
+        *status = ScanStatus::Waiting(chrono::Utc::now());
     }
 
     async fn update_media_directory(&self, name: &str, location: &Path, full_reload: bool) {
