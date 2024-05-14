@@ -38,7 +38,7 @@ impl crate::Plugin for Plugin {
                         }
                             .into_view()
                     }
-                    "mp3" | "opus" => {
+                    "mp3" | "opus" | "m4a" => {
                         view! {
                             <audio
                                 style:width="100%"
