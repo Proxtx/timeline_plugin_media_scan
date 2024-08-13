@@ -16,7 +16,7 @@ impl crate::Plugin for Plugin {
         Plugin {}
     }
 
-    fn get_component(&self, data: PluginEventData) -> crate::event_manager::EventResult<Box<dyn FnOnce() -> leptos::View>> {
+    fn get_component(&self, data: PluginEventData) -> crate::plugin_manager::EventResult<Box<dyn FnOnce() -> leptos::View>> {
         let path = data.get_data::<PathBuf>()?;
         let extension = path.extension().unwrap().to_str().unwrap().to_lowercase().to_string();
         let path_string = path.as_os_str().to_str().unwrap().to_string();
@@ -51,7 +51,7 @@ impl crate::Plugin for Plugin {
                         }
                             .into_view()
                     }
-                    _ => view! { <img style:width="100%" src=url/> }.into_view(),
+                    _ => view! { <img style:width="100%" src=url /> }.into_view(),
                 }}
             }.into_view()
         }))
