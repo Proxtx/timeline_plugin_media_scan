@@ -167,6 +167,10 @@ async fn get_status(cookies: &CookieJar<'_>, config: &State<Config>, current_sta
 }
 
 impl Plugin {
+    fn sign_string(&self, path: &str) -> String {
+        todo!();
+    } 
+
     async fn update_all_locations(&self) {
         let ignore_cache = match self.config.full_reload_interval {
             Some(v) => {
@@ -301,6 +305,12 @@ pub struct Media {
     path: String,
     time_modified: DateTime<Utc>,
     location_name: String
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SignedMedia {
+    path: String,
+    signature: String
 }
 
 type MediaEvent = Event<Media>;
