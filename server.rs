@@ -1,21 +1,9 @@
 use {
-    chrono::{DateTime, Utc},
-    futures::{StreamExt, TryStreamExt},
-    mongodb::bson::doc,
-    rocket::{get, http::{CookieJar, Status}, routes, State},
-    serde::{Deserialize, Serialize},
-    std::{
-        pin::Pin, str::FromStr,
-        collections::HashMap,
-        path::{Path, PathBuf},
-        sync::{atomic::{AtomicU32, Ordering}, Arc}
-    },
-    tokio::{fs::{self, File}, sync::RwLock},
     crate::{
         api::auth, cache::Cache, config::Config, db::{Database, Event}, AvailablePlugins, Plugin as PluginTrait, PluginData
-    },
-    types::{api::CompressedEvent, timing::Timing},
-    rocket::{Rocket, Build}
+    }, base64::Engine, chrono::{DateTime, Utc}, futures::{StreamExt, TryStreamExt}, mongodb::bson::doc, rocket::{get, http::{CookieJar, Status}, routes, Build, Rocket, State}, rsa::{pkcs1v15::{Signature, SigningKey, VerifyingKey}, sha2::Sha256, signature::{Keypair, RandomizedSigner, SignatureEncoding, Verifier}, RsaPrivateKey}, serde::{Deserialize, Serialize}, std::{
+        collections::HashMap, path::{Path, PathBuf}, pin::Pin, str::FromStr, sync::{atomic::{AtomicU32, Ordering}, Arc}
+    }, tokio::{fs::{self, File}, sync::RwLock}, types::{api::CompressedEvent, timing::Timing}
 };
 
 pub struct Plugin {
@@ -23,7 +11,9 @@ pub struct Plugin {
     config: ConfigData,
     cache: RwLock<Cache<LocationIndexingCache>>,
     full_reload_remaining: AtomicU32,
-    current_status: Arc<RwLock<ScanStatus>>
+    current_status: Arc<RwLock<ScanStatus>>,
+    signing_key: SigningKey<Sha256>,
+    verifying_key: VerifyingKey<Sha256>
 }
 
 #[derive(Debug)]
@@ -41,11 +31,14 @@ impl std::fmt::Display for ScanStatus {
     }
 }
 
+struct VerifyingKeyWrapper (pub VerifyingKey<Sha256>);
+
 #[derive(Serialize, Deserialize)]
 struct ConfigData {
     pub locations: HashMap<String, MediaLocation>,
     pub interval: u32,
     pub full_reload_interval: Option<u32>,
+    pub signing_key: RsaPrivateKey 
 }
 
 #[derive(Serialize, Deserialize)]
@@ -83,6 +76,9 @@ impl crate::Plugin for Plugin {
                 )
             });
 
+            let signing_key = SigningKey::new(config.signing_key.clone());
+            let verifying_key = signing_key.verifying_key();
+
         Plugin {
             plugin_data: data,
             full_reload_remaining: match config.full_reload_interval {
@@ -91,7 +87,9 @@ impl crate::Plugin for Plugin {
             },
             config,
             cache: RwLock::new(cache),
-            current_status: Arc::new(RwLock::new(ScanStatus::Waiting(chrono::Utc::now())))
+            current_status: Arc::new(RwLock::new(ScanStatus::Waiting(chrono::Utc::now()))),
+            signing_key,
+            verifying_key
         }
     }
 
@@ -117,6 +115,7 @@ impl crate::Plugin for Plugin {
         let plg_filter = Database::generate_find_plugin_filter(AvailablePlugins::timeline_plugin_media_scan);
         let filter = Database::combine_documents(filter, plg_filter);
         let database = self.plugin_data.database.clone();
+        let singing_key = self.signing_key.clone();
         Box::pin(async move {
             let mut cursor = database.get_events::<Media>().find(filter, None).await?;
             let mut result = Vec::new();
@@ -125,7 +124,10 @@ impl crate::Plugin for Plugin {
                 result.push(CompressedEvent {
                     title: t.event.location_name,
                     time: t.timing,
-                    data: Box::new(t.event.path)
+                    data: Box::new(SignedMedia {
+                        signature: sign_string(&singing_key, &t.event.path),
+                        path: t.event.path,
+                    })
                 })
             }
 
@@ -138,16 +140,16 @@ impl crate::Plugin for Plugin {
     }
 
     fn rocket_build_access (&self, rocket: Rocket<Build>) -> Rocket<Build> {
-        rocket.manage(self.current_status.clone())
+        rocket.manage(self.current_status.clone()).manage(VerifyingKeyWrapper(self.verifying_key.clone()))
     }
 }
 
-#[get("/file/<file>")]
-async fn get_file (file: String, cookies: &CookieJar<'_>, config: &State<Config>) -> (Status, Option<Result<File, std::io::Error>>) {
-    if auth(cookies, config).is_err() {
+#[get("/file/<file>/<signature>")]
+async fn get_file (file: &str, signature: &str, verifying_key: &State<VerifyingKeyWrapper>,) -> (Status, Option<Result<File, std::io::Error>>) {
+    if !verify_string(&verifying_key.inner().0, file, signature) {
         return (Status::Unauthorized, None)
     }
-    match PathBuf::from_str(&file) {
+    match PathBuf::from_str(file) {
         Ok(v) => {
             (Status::Ok, (Some(File::open(v).await)))
         }
@@ -166,11 +168,25 @@ async fn get_status(cookies: &CookieJar<'_>, config: &State<Config>, current_sta
     (Status::Ok, Some(format!("{}", status)))
 }
 
-impl Plugin {
-    fn sign_string(&self, path: &str) -> String {
-        todo!();
-    } 
+fn sign_string(signing_key: &SigningKey<Sha256>, string: &str) -> String {
+    let mut rng = rand::thread_rng();
+    let signature = signing_key.sign_with_rng(&mut rng, string.as_bytes());
+    base64::prelude::BASE64_STANDARD.encode(signature.to_vec())
+}
 
+fn verify_string(verifying_key: &VerifyingKey<Sha256>, string: &str, signature: &str) -> bool {
+    let bytes = match base64::prelude::BASE64_STANDARD.decode(signature) {
+        Ok(v) => v,
+        Err(_e) => return false
+    };
+    let bytes_slice: &[u8] = &bytes;
+    verifying_key.verify(string.as_bytes(), &match Signature::try_from(bytes_slice) {
+        Ok(v) => v,
+        Err(_e) => return false
+    }).is_ok()
+}
+
+impl Plugin {
     async fn update_all_locations(&self) {
         let ignore_cache = match self.config.full_reload_interval {
             Some(v) => {

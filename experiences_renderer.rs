@@ -3,6 +3,13 @@ use std::pin::Pin;
 use shared::timeline::types::api::CompressedEvent;
 use rand::Rng;
 use image::Pixel;
+use serde::Deserialize;
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct SignedMedia {
+    path: String,
+    signature: String
+}
 
 pub struct PluginRenderer {}
 
@@ -16,12 +23,12 @@ impl crate::renderer::PluginRenderer for PluginRenderer {
 
         Box::pin(async move {
             let mut target = DrawTarget::new(dimensions.0, dimensions.1);
-            let path = match serde_json::from_str::<String>(&data) {
+            let path = match serde_json::from_str::<SignedMedia>(&data) {
                 Ok(v) => v,
                 Err(e) => {
                     return Err(format!("Unable to read CompressedEvent: {}", e))
                 }
-            };
+            }.path;
             let mut img = match image::ImageReader::open(std::path::PathBuf::from(path)) {
                 Ok(v) => match v.decode() {
                     Ok(v) => v,

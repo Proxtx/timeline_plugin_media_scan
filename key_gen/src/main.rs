@@ -10,6 +10,6 @@ fn main() {
     let private_key = RsaPrivateKey::new(&mut rng, bits).expect("failed to generate a key");
     println!(
         "Private Key (between arrows): -->{}<--",
-        serde_json::to_string(&private_key).unwrap()
+        toml::to_string(&private_key).unwrap()
     );
 }
