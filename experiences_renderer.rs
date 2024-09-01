@@ -1,7 +1,6 @@
-use raqote::{DrawTarget, Source, SolidSource, DrawOptions, Image};
+use raqote::DrawTarget;
 use std::pin::Pin;
 use shared::timeline::types::api::CompressedEvent;
-use rand::Rng;
 use image::Pixel;
 use serde::Deserialize;
 
