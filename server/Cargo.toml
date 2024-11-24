@@ -1,15 +1,15 @@
 [package]
-name = "server"
+name = "timeline_plugin_media_scan_server"
 version = "0.1.0"
 edition = "2021"
 
 [lib]
-name = "server"
 path = "src/lib.rs"
 
 [dependencies]
 base64 = "0.22.1"
-chrono = "0.4.38"
 rand = "0.8.5"
-rsa = "0.9.6"
-tokio = { version = "1.41.1", features = ["full"] }
+rsa = { version = "0.9.6", features = ["sha2", "serde"] }
+serde = "1.0.215"
+server_api = { path = "../../../server_api/" }
+rocket = { version = "0.5.1", features = ["json"] }

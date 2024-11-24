@@ -5,6 +5,6 @@ edition = "2021"
 
 [dependencies]
 rand = "0.8.5"
-rsa = {version = "0.9.6", features = ["sha2", "serde"] }
-serde = { version = "1.0.209", features = ["derive"] }
+rsa = { version = "0.9.6", features = ["sha2", "serde"] }
+serde = { version = "1.0.215", features = ["derive"] }
 toml = "0.8.19"

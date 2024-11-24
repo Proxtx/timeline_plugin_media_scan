@@ -1,9 +1,53 @@
 use {
-    crate::{
-        api::auth, cache::Cache, config::Config, db::{Database, Event}, AvailablePlugins, Plugin as PluginTrait, PluginData
-    }, base64::Engine, chrono::{DateTime, Utc}, futures::{StreamExt, TryStreamExt}, mongodb::bson::doc, rocket::{get, http::{CookieJar, Status}, routes, Build, Rocket, State}, rsa::{pkcs1v15::{Signature, SigningKey, VerifyingKey}, sha2::Sha256, signature::{Keypair, RandomizedSigner, SignatureEncoding, Verifier}, RsaPrivateKey}, serde::{Deserialize, Serialize}, std::{
-        collections::HashMap, path::{Path, PathBuf}, pin::Pin, str::FromStr, sync::{atomic::{AtomicU32, Ordering}, Arc}
-    }, tokio::{fs::{self, File}, sync::RwLock}, types::{api::CompressedEvent, timing::Timing}
+    base64::Engine,
+    rsa::{
+        pkcs1v15::{Signature, SigningKey, VerifyingKey},
+        sha2::Sha256,
+        signature::{Keypair, RandomizedSigner, SignatureEncoding, Verifier},
+        RsaPrivateKey,
+    },
+    serde::{Deserialize, Serialize},
+    server_api::{
+        cache::Cache,
+        config::Config,
+        db::{Database, Event},
+        external::{
+            futures::{self, StreamExt, TryStreamExt},
+            rocket::{
+                self, get,
+                http::{CookieJar, Status},
+                routes, Build, Rocket, State,
+            },
+            tokio::{
+                fs::{self, File},
+                sync::RwLock,
+            },
+            toml,
+            types::{
+                self,
+                api::CompressedEvent,
+                available_plugins::AvailablePlugins,
+                external::{
+                    chrono::{self, DateTime, Utc},
+                    mongodb::bson::doc,
+                    serde_json,
+                },
+                timing::Timing,
+            },
+        },
+        plugin::{PluginData, PluginTrait},
+        web::auth,
+    },
+    std::{
+        collections::HashMap,
+        path::{Path, PathBuf},
+        pin::Pin,
+        str::FromStr,
+        sync::{
+            atomic::{AtomicU32, Ordering},
+            Arc,
+        },
+    },
 };
 
 pub struct Plugin {
@@ -13,32 +57,32 @@ pub struct Plugin {
     full_reload_remaining: AtomicU32,
     current_status: Arc<RwLock<ScanStatus>>,
     signing_key: SigningKey<Sha256>,
-    verifying_key: VerifyingKey<Sha256>
+    verifying_key: VerifyingKey<Sha256>,
 }
 
 #[derive(Debug)]
 enum ScanStatus {
     Busy(String),
-    Waiting(chrono::DateTime<chrono::Utc>)
+    Waiting(chrono::DateTime<chrono::Utc>),
 }
 
 impl std::fmt::Display for ScanStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Busy(w) => write!(f, "Busy with: {}", w),
-            Self::Waiting(since) => write!(f, "Waiting since: {}", since)
+            Self::Waiting(since) => write!(f, "Waiting since: {}", since),
         }
     }
 }
 
-struct VerifyingKeyWrapper (pub VerifyingKey<Sha256>);
+struct VerifyingKeyWrapper(pub VerifyingKey<Sha256>);
 
 #[derive(Serialize, Deserialize)]
 struct ConfigData {
     pub locations: HashMap<String, MediaLocation>,
     pub interval: u32,
     pub full_reload_interval: Option<u32>,
-    pub signing_key: RsaPrivateKey 
+    pub signing_key: RsaPrivateKey,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -53,7 +97,7 @@ struct LocationIndexingCache {
     timing_cache: HashMap<PathBuf, DateTime<Utc>>,
 }
 
-impl crate::Plugin for Plugin {
+impl server_api::plugin::PluginTrait for Plugin {
     async fn new(data: PluginData) -> Self
     where
         Self: Sized,
@@ -76,30 +120,30 @@ impl crate::Plugin for Plugin {
                 )
             });
 
-            let signing_key = SigningKey::new(config.signing_key.clone());
-            let verifying_key = signing_key.verifying_key();
+        let signing_key = SigningKey::new(config.signing_key.clone());
+        let verifying_key = signing_key.verifying_key();
 
         Plugin {
             plugin_data: data,
             full_reload_remaining: match config.full_reload_interval {
                 Some(v) => AtomicU32::from(v),
-                None => AtomicU32::from(0)
+                None => AtomicU32::from(0),
             },
             config,
             cache: RwLock::new(cache),
             current_status: Arc::new(RwLock::new(ScanStatus::Waiting(chrono::Utc::now()))),
             signing_key,
-            verifying_key
+            verifying_key,
         }
     }
 
     fn get_type() -> crate::AvailablePlugins
     where
-    Self: Sized,
+        Self: Sized,
     {
         AvailablePlugins::timeline_plugin_media_scan
     }
-    
+
     fn request_loop<'a>(
         &'a self,
     ) -> core::pin::Pin<Box<dyn futures::Future<Output = Option<chrono::Duration>> + Send + 'a>>
@@ -110,9 +154,18 @@ impl crate::Plugin for Plugin {
         })
     }
 
-    fn get_compressed_events (&self, query_range: &types::timing::TimeRange) -> Pin<Box<dyn futures::Future<Output = types::api::APIResult<Vec<types::api::CompressedEvent>>> + Send>> {
+    fn get_compressed_events(
+        &self,
+        query_range: &types::timing::TimeRange,
+    ) -> Pin<
+        Box<
+            dyn futures::Future<Output = types::api::APIResult<Vec<types::api::CompressedEvent>>>
+                + Send,
+        >,
+    > {
         let filter = Database::generate_range_filter(query_range);
-        let plg_filter = Database::generate_find_plugin_filter(AvailablePlugins::timeline_plugin_media_scan);
+        let plg_filter =
+            Database::generate_find_plugin_filter(AvailablePlugins::timeline_plugin_media_scan);
         let filter = Database::combine_documents(filter, plg_filter);
         let database = self.plugin_data.database.clone();
         let singing_key = self.signing_key.clone();
@@ -124,10 +177,11 @@ impl crate::Plugin for Plugin {
                 result.push(CompressedEvent {
                     title: t.event.location_name,
                     time: t.timing,
-                    data: Box::new(SignedMedia {
+                    data: serde_json::to_value(SignedMedia {
                         signature: sign_string(&singing_key, &t.event.path),
                         path: t.event.path,
                     })
+                    .unwrap(),
                 })
             }
 
@@ -135,34 +189,40 @@ impl crate::Plugin for Plugin {
         })
     }
 
-    fn get_routes () -> Vec<rocket::Route> {
+    fn get_routes() -> Vec<rocket::Route> {
         routes![get_file, get_status]
     }
 
-    fn rocket_build_access (&self, rocket: Rocket<Build>) -> Rocket<Build> {
-        rocket.manage(self.current_status.clone()).manage(VerifyingKeyWrapper(self.verifying_key.clone()))
+    fn rocket_build_access(&self, rocket: Rocket<Build>) -> Rocket<Build> {
+        rocket
+            .manage(self.current_status.clone())
+            .manage(VerifyingKeyWrapper(self.verifying_key.clone()))
     }
 }
 
 #[get("/file/<file>/<signature>")]
-async fn get_file (file: &str, signature: &str, verifying_key: &State<VerifyingKeyWrapper>,) -> (Status, Option<Result<File, std::io::Error>>) {
+async fn get_file(
+    file: &str,
+    signature: &str,
+    verifying_key: &State<VerifyingKeyWrapper>,
+) -> (Status, Option<Result<File, std::io::Error>>) {
     if !verify_string(&verifying_key.inner().0, file, signature) {
-        return (Status::Unauthorized, None)
+        return (Status::Unauthorized, None);
     }
     match PathBuf::from_str(file) {
-        Ok(v) => {
-            (Status::Ok, (Some(File::open(v).await)))
-        }
-        Err(_) => {
-            (Status::BadRequest, None)
-        }
+        Ok(v) => (Status::Ok, (Some(File::open(v).await))),
+        Err(_) => (Status::BadRequest, None),
     }
 }
 
 #[get("/status")]
-async fn get_status(cookies: &CookieJar<'_>, config: &State<Config>, current_status: &State<Arc<RwLock<ScanStatus>>>) -> (Status, Option<String>) {
+async fn get_status(
+    cookies: &CookieJar<'_>,
+    config: &State<Config>,
+    current_status: &State<Arc<RwLock<ScanStatus>>>,
+) -> (Status, Option<String>) {
     if auth(cookies, config).is_err() {
-        return (Status::Unauthorized, None)
+        return (Status::Unauthorized, None);
     }
     let status = current_status.read().await;
     (Status::Ok, Some(format!("{}", status)))
@@ -177,13 +237,18 @@ fn sign_string(signing_key: &SigningKey<Sha256>, string: &str) -> String {
 fn verify_string(verifying_key: &VerifyingKey<Sha256>, string: &str, signature: &str) -> bool {
     let bytes = match base64::prelude::BASE64_STANDARD.decode(signature) {
         Ok(v) => v,
-        Err(_e) => return false
+        Err(_e) => return false,
     };
     let bytes_slice: &[u8] = &bytes;
-    verifying_key.verify(string.as_bytes(), &match Signature::try_from(bytes_slice) {
-        Ok(v) => v,
-        Err(_e) => return false
-    }).is_ok()
+    verifying_key
+        .verify(
+            string.as_bytes(),
+            &match Signature::try_from(bytes_slice) {
+                Ok(v) => v,
+                Err(_e) => return false,
+            },
+        )
+        .is_ok()
 }
 
 impl Plugin {
@@ -197,19 +262,21 @@ impl Plugin {
                         true
                     }
                     false => {
-                        self.full_reload_remaining.store(current_remain-1, Ordering::Relaxed);
+                        self.full_reload_remaining
+                            .store(current_remain - 1, Ordering::Relaxed);
                         false
                     }
                 }
             }
-            None => false
+            None => false,
         };
         for (name, location) in self.config.locations.iter() {
             {
-                let mut status = self.current_status.write().await; 
+                let mut status = self.current_status.write().await;
                 *status = ScanStatus::Busy(name.clone());
             }
-            self.update_media_directory(name, &location.location, ignore_cache).await;
+            self.update_media_directory(name, &location.location, ignore_cache)
+                .await;
         }
 
         let mut status = self.current_status.write().await;
@@ -217,42 +284,54 @@ impl Plugin {
     }
 
     async fn update_media_directory(&self, name: &str, location: &Path, full_reload: bool) {
-        let last_cache = self.cache.read().await.get().timing_cache.get(location).cloned();
+        let last_cache = self
+            .cache
+            .read()
+            .await
+            .get()
+            .timing_cache
+            .get(location)
+            .cloned();
         let latest_time = match (full_reload, last_cache) {
             (false, Some(v)) => v,
             (false, None) => {
                 let mod_result = self.cache.write().await.modify::<Plugin>(|cache| {
-                cache.timing_cache.insert(
-                    location.to_path_buf(),
-                    DateTime::from_timestamp_millis(0).unwrap(),
-                ); //0 is a valid time-stamp
+                    cache.timing_cache.insert(
+                        location.to_path_buf(),
+                        DateTime::from_timestamp_millis(0).unwrap(),
+                    ); //0 is a valid time-stamp
                 });
-                match mod_result  {
-                    Ok(()) => {},
+                match mod_result {
+                    Ok(()) => {}
                     Err(e) => {
-                        self.plugin_data.report_error_string(format!("Unable to save to cache: {}", e));
+                        self.plugin_data
+                            .report_error_string(format!("Unable to save to cache: {}", e));
                         return;
                     }
                 }
-                *self.cache.read().await
+                *self
+                    .cache
+                    .read()
+                    .await
                     .get()
                     .timing_cache
                     .get(location)
                     .expect("Unable to cache: Probably an error inside the cache")
                 //we just updated the cache;
-            },
-            (true, _) => {
-                DateTime::from_timestamp_millis(0).unwrap()
             }
+            (true, _) => DateTime::from_timestamp_millis(0).unwrap(),
         };
-        let (media, new_latest_time) = match recursive_directory_scan(name, location, &latest_time).await
-        {
-            Ok(v) => v,
-            Err(e) => {
-                self.plugin_data.report_error_string(format!("The Media Scan plugin was unable to scan a directory: {:?} \n Error: {}", location, e));
-                return;
-            }
-        };
+        let (media, new_latest_time) =
+            match recursive_directory_scan(name, location, &latest_time).await {
+                Ok(v) => v,
+                Err(e) => {
+                    self.plugin_data.report_error_string(format!(
+                        "The Media Scan plugin was unable to scan a directory: {:?} \n Error: {}",
+                        location, e
+                    ));
+                    return;
+                }
+            };
         let media: Vec<MediaEvent> = media
             .into_iter()
             .map(|media| Event {
@@ -269,12 +348,16 @@ impl Plugin {
             .database
             .get_events()
             .find(
-                Database::combine_documents(Database::generate_find_plugin_filter(AvailablePlugins::timeline_plugin_media_scan), 
-                doc! {
-                    "event.path": {
-                        "$in": paths
-                    }
-                }),
+                Database::combine_documents(
+                    Database::generate_find_plugin_filter(
+                        AvailablePlugins::timeline_plugin_media_scan,
+                    ),
+                    doc! {
+                        "event.path": {
+                            "$in": paths
+                        }
+                    },
+                ),
                 None,
             )
             .await
@@ -282,12 +365,18 @@ impl Plugin {
             Ok(v) => match v.try_collect().await {
                 Ok(v) => v,
                 Err(e) => {
-                    self.plugin_data.report_error_string(format!("Unable to collect all matching paths: {}", e));
+                    self.plugin_data.report_error_string(format!(
+                        "Unable to collect all matching paths: {}",
+                        e
+                    ));
                     return;
                 }
             },
             Err(e) => {
-                self.plugin_data.report_error_string(format!("Error fetching already found media from database: {}", e));
+                self.plugin_data.report_error_string(format!(
+                    "Error fetching already found media from database: {}",
+                    e
+                ));
                 return;
             }
         };
@@ -302,14 +391,24 @@ impl Plugin {
         if !insert.is_empty() {
             match self.plugin_data.database.register_events(&insert).await {
                 Ok(_t) => {
-                    self.cache.write().await.modify::<Plugin>(move |data| {
-                        data.timing_cache.insert(location.to_path_buf(), new_latest_time);
-                    }).unwrap_or_else(|e| {
-                        self.plugin_data.report_error_string(format!("Unable to save cache (media scan plugin): {e}"));
-                });
+                    self.cache
+                        .write()
+                        .await
+                        .modify::<Plugin>(move |data| {
+                            data.timing_cache
+                                .insert(location.to_path_buf(), new_latest_time);
+                        })
+                        .unwrap_or_else(|e| {
+                            self.plugin_data.report_error_string(format!(
+                                "Unable to save cache (media scan plugin): {e}"
+                            ));
+                        });
                 }
                 Err(e) => {
-                    self.plugin_data.report_error_string(format!("Unable to add MediaEvent to Database: {}", e));
+                    self.plugin_data.report_error_string(format!(
+                        "Unable to add MediaEvent to Database: {}",
+                        e
+                    ));
                 }
             }
         }
@@ -320,18 +419,20 @@ impl Plugin {
 pub struct Media {
     path: String,
     time_modified: DateTime<Utc>,
-    location_name: String
+    location_name: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SignedMedia {
     path: String,
-    signature: String
+    signature: String,
 }
 
 type MediaEvent = Event<Media>;
 
-const SUPPORTED_EXTENSIONS: [&str; 12] = ["png", "jpg", "mp4", "mkv", "webm", "jpeg", "mov", "heic", "gif", "mp3", "opus", "m4a"];
+const SUPPORTED_EXTENSIONS: [&str; 12] = [
+    "png", "jpg", "mp4", "mkv", "webm", "jpeg", "mov", "heic", "gif", "mp3", "opus", "m4a",
+];
 
 pub async fn recursive_directory_scan(
     location_name: &str,
@@ -345,8 +446,12 @@ pub async fn recursive_directory_scan(
     while let Ok(Some(ref entry)) = next_result {
         let file_type = entry.file_type().await?;
         if file_type.is_dir() {
-            let (mut found_media_recusion, updated_time) =
-                Box::pin(recursive_directory_scan(location_name, &entry.path(), current_newest)).await?;
+            let (mut found_media_recusion, updated_time) = Box::pin(recursive_directory_scan(
+                location_name,
+                &entry.path(),
+                current_newest,
+            ))
+            .await?;
             found_media.append(&mut found_media_recusion);
             if updated_time > updated_newest {
                 updated_newest = updated_time;
@@ -356,24 +461,28 @@ pub async fn recursive_directory_scan(
                 match ex.to_str() {
                     Some(ex) => {
                         if SUPPORTED_EXTENSIONS.contains(&ex.to_lowercase().as_str()) {
-                            let file_creation_time =
-                                match File::open(entry.path()).await?.metadata().await?.modified() {
-                                    Ok(v) => v,
-                                    Err(e) => {
-                                        eprintln!(
+                            let file_creation_time = match File::open(entry.path())
+                                .await?
+                                .metadata()
+                                .await?
+                                .modified()
+                            {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    eprintln!(
                                         "Unable to find creation time for file: {:?}\nError: {}",
                                         entry.path(),
                                         e
                                     );
-                                        continue;
-                                    }
-                                };
+                                    continue;
+                                }
+                            };
                             let creation_time: DateTime<Utc> = file_creation_time.into();
                             if &creation_time > current_newest {
                                 found_media.push(Media {
                                     path: entry.path().to_str().unwrap_or("default").to_string(),
                                     time_modified: creation_time,
-                                    location_name: location_name.to_string()
+                                    location_name: location_name.to_string(),
                                 });
                                 if creation_time > updated_newest {
                                     updated_newest = creation_time;

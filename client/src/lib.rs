@@ -1,8 +1,7 @@
 use {
-    std::path::PathBuf,
-    leptos::{view, IntoView},
-    crate::{api, plugin_manager::{PluginEventData, Style}},
-    serde::Deserialize
+    client_api::{external::{leptos::{IntoView, View, view}, types::external::serde::Deserialize}, plugin::{PluginData, PluginEventData, PluginTrait}, style::Style}, std::path::PathBuf,
+    client_api::result::EventResult,
+    client_api::api
 };
 
 #[derive(Clone, Debug, Deserialize)]
@@ -13,9 +12,9 @@ pub struct SignedMedia {
 
 pub struct Plugin {}
 
-impl crate::Plugin for Plugin {
+impl PluginTrait for Plugin {
     async fn new(
-        _data: crate::plugin_manager::PluginData,
+        _data: PluginData,
     ) -> Self
     where
         Self: Sized,
@@ -23,7 +22,7 @@ impl crate::Plugin for Plugin {
         Plugin {}
     }
 
-    fn get_component(&self, data: PluginEventData) -> crate::plugin_manager::EventResult<Box<dyn FnOnce() -> leptos::View>> {
+    fn get_component(&self, data: PluginEventData) -> EventResult<Box<dyn FnOnce() -> View>> {
         let media = data.get_data::<SignedMedia>()?;
         let path = PathBuf::from(media.path);
         let extension = path.extension().unwrap().to_str().unwrap().to_lowercase().to_string();
@@ -60,13 +59,13 @@ impl crate::Plugin for Plugin {
                         }
                             .into_view()
                     }
-                    _ => view! { <img style:width="100%" src=url/> }.into_view(),
+                    _ => view! { <img style:width="100%" src=url /> }.into_view(),
                 }}
             }.into_view()
         }))
     }
 
-    fn get_style(&self) -> crate::plugin_manager::Style {
+    fn get_style(&self) -> Style {
         Style::Acc1
     }
 }
