@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 use std::pin::Pin;
-use shared::timeline::types::api::CompressedEvent;
+use timeline_types::api::CompressedEvent;
 use crate::renderer::render_image;
 use serde::Deserialize;
 
@@ -21,7 +21,7 @@ impl crate::renderer::PluginRenderer for PluginRenderer {
         let data = event.data.clone();
 
         Box::pin(async move {
-            let path = match serde_json::from_str::<SignedMedia>(&data) {
+            let path = match serde_json::from_value::<SignedMedia>(data) {
                 Ok(v) => v,
                 Err(e) => {
                     return Err(format!("Unable to read CompressedEvent: {}", e))
