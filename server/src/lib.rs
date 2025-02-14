@@ -384,7 +384,14 @@ impl Plugin {
         let mut insert: Vec<MediaEvent> = Vec::new();
 
         for media in media {
-            if !already_found_media.contains(&media) {
+            let mut found = false;
+            for existing in already_found_media.iter() {
+                if existing.id == media.id {
+                    found = true;
+                    break;
+                }
+            }
+            if !found {
                 insert.push(media)
             }
         }
